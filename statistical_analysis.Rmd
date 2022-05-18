@@ -137,183 +137,9 @@ bc_data %>% dplyr::group_by(id, stimuli, age) %>% dplyr::summarize(
 
 ```
 
-<----------------------------------------TODO TONI----------------------------->
-
-## Graphs
 
 
 
-```{r eval: FALSE}
-bc_data$stimuli= factor(bc_data$stimuli, levels = c("pt-high", "pt_moderate", "pt-low", "pt-very-low", "silence", "control"))
-
-bc_data$pause = bc_data$pause/1000
-bc_data1 = bc_data
-bc_data1[bc_data$pause == .001, "pause"] = .015
-
- bc_data   %>%
-   dplyr::group_by(stimuli, age) %>% dplyr::summarize(reaction_percentage = sum(reaction)/length(reaction)) %>%
-  ggplot( aes(x=stimuli, y = reaction_percentage, fill = age)) +
-   geom_bar(stat = "identity", position = "dodge") + 
-   scale_x_discrete(labels=c("pt-high" = "high", "pt_moderate" = "moderate",
-                            "pt-low" = "low", "pt-very-low" = "very low", "control" = "cricket"))+
-   xlab("Predation Threat") + ylab("Proportion of reacting males") -> p1a
-
- bc_data   %>%
-   dplyr::group_by(stimuli, age) %>% dplyr::summarize(reaction_percentage = sum(reaction)/length(reaction)) %>%
-  ggplot( aes(x=stimuli, y = reaction_percentage, fill = age, alpha = 0.5)) +
-   geom_bar(stat = "identity", position = "dodge", width=0.8) +
- theme_bw()+
-theme(text = element_text(size = 15), legend.position = "none",
-      # remove the vertical grid lines
-           panel.grid.major.x = element_blank() ,
-           # explicitly set the horizontal lines (or they will disappear too)
-           panel.grid.major.y = element_line( size=.01, color="grey" ) 
-      ) +
-  scale_fill_manual(values=c( "olivedrab1","olivedrab4"))+
-   scale_x_discrete(labels=c("pt-high" = "High", "pt_moderate" = "Moderate",
-                            "pt-low" = "Low", "pt-very-low" = "Very low", "silence" = "Silence",
-                            "control" = "Control"))+
-   xlab("Predation Threat") + ylab("Reacting males") -> p1
-print(p1)
-dev.print( png,filename="reacting-males.png",
-           units="cm",width=14,res=300,bg="white")
-
-
-bc_data  %>% dplyr::group_by(stimuli, age) %>% dplyr::summarize(ignore_threat = sum(simultaneous_singing)/length(simultaneous_singing)) %>%
- ggplot( aes(x=stimuli, y = ignore_threat, fill = age, alpha = 0.5)) +
-  theme_bw()+
-  theme(text = element_text(size = 15), 
-        legend.position = "none",
-        # remove the vertical grid lines
-           panel.grid.major.x = element_blank() ,
-           # explicitly set the horizontal lines (or they will disappear too)
-           panel.grid.major.y = element_line( size=.01, color="grey" ) ) +
-  scale_fill_manual(values=c( "olivedrab1","olivedrab4"))+
-  geom_bar(stat = "identity", position = "dodge", width=0.8) +
-  scale_x_discrete(labels=c("pt-high" = "High", "pt_moderate" = "Moderate",
-                            "pt-low" = "Low", "pt-very-low" = "Very low", "silence" = "Silence",
-                            "control" = "Control"))+
-  xlab("Predation Threat") + ylab("Ignoring threat") -> p2
-print(p2)
-dev.print( png,filename="ignoring-predation-threat.png",
-           units="cm",width=14,res=300,bg="white")
-
-
-
-bc_data1$pause[bc_data1$pause <.025] <- .025
-f1 <- function(x) {
-  log10(mean(10 ^ x))
-}
- 
-ggplot(data = bc_data1, aes(x=stimuli, y = pause, fill = age)) +
-  theme_classic()+
-  scale_y_log10(breaks = c(25,50,100, 200,500,1000,2000, 5000, 10000, 20000)) +
-  theme(panel.grid.minor = element_blank(),
-         text = element_text(size = 15),
-         legend.position = "none",
-         # remove the vertical grid lines
-           panel.grid.major.x = element_blank() ,
-           # explicitly set the horizontal lines (or they will disappear too)
-           panel.grid.major.y = element_line( size=.001, color="grey" )
-    )+
-  scale_fill_manual(values=c( "#E69F00","#999999"))+
-  scale_color_manual(values=c( "#E69F00","#999999"))+
-  scale_x_discrete( labels=c("pt-high" = "High", "pt_moderate" = "Moderate",
-                           "pt-low" = "Low", "pt-very-low" = "Very low",
-                           "silence" = "Silence", "control" = "Control"))+
-  xlab("Predation threat") +
-  ylab("Pause duration (ms)")+
-  # geom_split_violin(trim = TRUE, alpha = 0.6, color = NA)+
- geom_boxplot(position = "dodge", alpha = 0.5) +
-  geom_dotplot(binaxis = "y", stackdir = "center",
-                stackratio=0.8, dotsize = 0.6,
-                position= "dodge",
-                alpha = 0.2,
-               binwidth = 0.15) +
-  stat_summary(geom = "point",
-               fun= f1, size = 4,
-               position=position_dodge(width=0.8)) -> p3a
-
-## same as previous plot but visualized with split violin plot
-
-#Function for ggplot2 that creates split violins
-GeomSplitViolin <- ggproto("GeomSplitViolin", GeomViolin,
-                           draw_group = function(self, data, ..., draw_quantiles = NULL) {
-                             data <- transform(data, xminv = x - violinwidth * (x - xmin), 
-                                               xmaxv = x + violinwidth * (xmax - x))
-                             grp <- data[1, "group"]
-                             newdata <- plyr::arrange(transform(data, x = if (grp %% 2 == 1) xminv else xmaxv), 
-                                                      if (grp %% 2 == 1) y else -y)
-                             newdata <- rbind(newdata[1, ], newdata, newdata[nrow(newdata), ], newdata[1, ])
-                             newdata[c(1, nrow(newdata) - 1, nrow(newdata)), "x"] <- round(newdata[1, "x"])
-
-                             if (length(draw_quantiles) > 0 & !scales::zero_range(range(data$y))) {
-                               stopifnot(all(draw_quantiles >= 0), all(draw_quantiles <=
-                                                                         1))
-                               quantiles <- ggplot2:::create_quantile_segment_frame(data, draw_quantiles)
-                               aesthetics <- data[rep(1, nrow(quantiles)), setdiff(names(data), c("x", "y")), 
-                                                  drop = FALSE]
-                               aesthetics$alpha <- rep(1, nrow(quantiles))
-                               both <- cbind(quantiles, aesthetics)
-                               quantile_grob <- GeomPath$draw_panel(both, ...)
-                               ggplot2:::ggname("geom_split_violin", grid::grobTree(GeomPolygon$draw_panel(newdata, ...), quantile_grob))
-                             }
-                             else {
-                               ggplot2:::ggname("geom_split_violin", GeomPolygon$draw_panel(newdata, ...))
-                             }
-                           })
-
-geom_split_violin <- function(mapping = NULL, data = NULL, stat = "ydensity", position = "identity", ...,
-                              draw_quantiles = NULL, trim = TRUE, scale = "area", na.rm = FALSE,
-                              show.legend = NA, inherit.aes = TRUE) {
-  layer(data = data, mapping = mapping, stat = stat, geom = GeomSplitViolin,
-        position = position, show.legend = show.legend, inherit.aes = inherit.aes,
-        params = list(trim = trim, scale = scale, draw_quantiles = draw_quantiles, na.rm = na.rm, ...))
-}
-
-
-ggplot(data = bc_data1, aes(x=stimuli, y = pause, fill = age)) +
-  theme_classic()+
-  scale_y_log10(breaks = c(.025,.050,.100, .200,.500,1.000,2.000, 5.000, 10.000, 20.000, 40.000), 
-                limits = c(.024, 80)) +
-  theme(panel.grid.minor = element_blank(),
-         text = element_text(size = 16),
-         legend.position = "none",
-         # remove the vertical grid lines
-           panel.grid.major.x = element_blank() ,
-           # explicitly set the horizontal lines (or they will disappear too)
-           panel.grid.major.y = element_line( size=.001, color="grey" )
-    )+
-  scale_fill_manual(values=c( "olivedrab1","olivedrab4"))+
-  scale_color_manual(values=c( "olivedrab1","olivedrab4"))+
-  scale_x_discrete( labels=c("pt-high" = "High", "pt_moderate" = "Moderate",
-                           "pt-low" = "Low", "pt-very-low" = "Very low",
-                           "silence" = "Silence", "control" = "Control"))+
-  xlab("Predation threat") +
-  ylab("Pause duration (s)")+
-  geom_split_violin(trim = FALSE, alpha = 0.5, color = NA, adjust = .9, scale = "width")+
-  geom_dotplot(binaxis = "y", stackdir = "center",
-                stackratio=0.8, dotsize = 0.6,
-                position = position_dodge(width = .5),
-                alpha = 0.2,
-               binwidth = 0.15) +
-  stat_summary(fun= f1,
-               geom = "crossbar",
-               color=c("grey50","grey30","grey50","grey30","grey50","grey30",
-                       "grey50","grey30","grey50","grey30","grey50","grey30"),
-               width = 0.40,
-               position = position_dodge(width = .40),) -> p4
-
-print(p4)
-dev.print( png,filename="pause_violin.png",
-           units="cm",width=14,res=300,bg="white")
-
- 
-
-
-```
-
-<---------------------------------------TONI----------------------------------->
 
 
 # Modeling
@@ -569,24 +395,144 @@ exp(predict(pause_m[[1]], data.frame("age" = as.factor(1), db_bat = 77, db_contr
 ```
 
 
-# Some resources from the web
+## Graphs
 
-Nice resource with lme (linear mixed effects) and a lot of plots
-https://ms.mcmaster.ca/~bolker/R/misc/foxchapter/bolker_chap.html
 
-GLMM FAQ
-https://bbolker.github.io/mixedmodels-misc/glmmFAQ.html
 
-Dealing with quasi- models in R
-https://cran.r-project.org/web/packages/bbmle/vignettes/quasi.pdf
+```{r eval: FALSE}
+bc_data$stimuli= factor(bc_data$stimuli, levels = c("pt-high", "pt_moderate", "pt-low", "pt-very-low", "silence", "control"))
 
-MASS Package
-https://cran.r-project.org/web/packages/MASS/MASS.pdf
+bc_data$pause = bc_data$pause/1000
+bc_data1 = bc_data
+bc_data1[bc_data$pause == .001, "pause"] = .015
 
-Are random effects necessary?
-https://stats.stackexchange.com/questions/56150/how-can-i-test-whether-a-random-effect-is-significant
+ bc_data   %>%
+   dplyr::group_by(stimuli, age) %>% dplyr::summarize(reaction_percentage = sum(reaction)/length(reaction)) %>%
+  ggplot( aes(x=stimuli, y = reaction_percentage, fill = age)) +
+   geom_bar(stat = "identity", position = "dodge") + 
+   scale_x_discrete(labels=c("pt-high" = "high", "pt_moderate" = "moderate",
+                            "pt-low" = "low", "pt-very-low" = "very low", "control" = "cricket"))+
+   xlab("Predation Threat") + ylab("Proportion of reacting males") -> p1a
 
-Multivariate
-https://data.library.virginia.edu/getting-started-with-multivariate-multiple-regression/
+ bc_data   %>%
+   dplyr::group_by(stimuli, age) %>% dplyr::summarize(reaction_percentage = sum(reaction)/length(reaction)) %>%
+  ggplot( aes(x=stimuli, y = reaction_percentage, fill = age, alpha = 0.5)) +
+   geom_bar(stat = "identity", position = "dodge", width=0.8) +
+ theme_bw()+
+theme(text = element_text(size = 15), legend.position = "none",
+      # remove the vertical grid lines
+           panel.grid.major.x = element_blank() ,
+           # explicitly set the horizontal lines (or they will disappear too)
+           panel.grid.major.y = element_line( size=.01, color="grey" ) 
+      ) +
+  scale_fill_manual(values=c( "olivedrab1","olivedrab4"))+
+   scale_x_discrete(labels=c("pt-high" = "High", "pt_moderate" = "Moderate",
+                            "pt-low" = "Low", "pt-very-low" = "Very low", "silence" = "Silence",
+                            "control" = "Control"))+
+   xlab("Predation Threat") + ylab("Reacting males") -> p1
+print(p1)
+dev.print( png,filename="reacting-males.png",
+           units="cm",width=14,res=300,bg="white")
 
-https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2888330/
+
+bc_data  %>% dplyr::group_by(stimuli, age) %>% dplyr::summarize(ignore_threat = sum(simultaneous_singing)/length(simultaneous_singing)) %>%
+ ggplot( aes(x=stimuli, y = ignore_threat, fill = age, alpha = 0.5)) +
+  theme_bw()+
+  theme(text = element_text(size = 15), 
+        legend.position = "none",
+        # remove the vertical grid lines
+           panel.grid.major.x = element_blank() ,
+           # explicitly set the horizontal lines (or they will disappear too)
+           panel.grid.major.y = element_line( size=.01, color="grey" ) ) +
+  scale_fill_manual(values=c( "olivedrab1","olivedrab4"))+
+  geom_bar(stat = "identity", position = "dodge", width=0.8) +
+  scale_x_discrete(labels=c("pt-high" = "High", "pt_moderate" = "Moderate",
+                            "pt-low" = "Low", "pt-very-low" = "Very low", "silence" = "Silence",
+                            "control" = "Control"))+
+  xlab("Predation Threat") + ylab("Ignoring threat") -> p2
+print(p2)
+dev.print( png,filename="ignoring-predation-threat.png",
+           units="cm",width=14,res=300,bg="white")
+
+
+GeomSplitViolin <- ggproto("GeomSplitViolin", GeomViolin,
+                           draw_group = function(self, data, ..., draw_quantiles = NULL) {
+                             data <- transform(data, xminv = x - violinwidth * (x - xmin), 
+                                               xmaxv = x + violinwidth * (xmax - x))
+                             grp <- data[1, "group"]
+                             newdata <- plyr::arrange(transform(data, x = if (grp %% 2 == 1) xminv else xmaxv), 
+                                                      if (grp %% 2 == 1) y else -y)
+                             newdata <- rbind(newdata[1, ], newdata, newdata[nrow(newdata), ], newdata[1, ])
+                             newdata[c(1, nrow(newdata) - 1, nrow(newdata)), "x"] <- round(newdata[1, "x"])
+
+                             if (length(draw_quantiles) > 0 & !scales::zero_range(range(data$y))) {
+                               stopifnot(all(draw_quantiles >= 0), all(draw_quantiles <=
+                                                                         1))
+                               quantiles <- ggplot2:::create_quantile_segment_frame(data, draw_quantiles)
+                               aesthetics <- data[rep(1, nrow(quantiles)), setdiff(names(data), c("x", "y")), 
+                                                  drop = FALSE]
+                               aesthetics$alpha <- rep(1, nrow(quantiles))
+                               both <- cbind(quantiles, aesthetics)
+                               quantile_grob <- GeomPath$draw_panel(both, ...)
+                               ggplot2:::ggname("geom_split_violin", grid::grobTree(GeomPolygon$draw_panel(newdata, ...), quantile_grob))
+                             }
+                             else {
+                               ggplot2:::ggname("geom_split_violin", GeomPolygon$draw_panel(newdata, ...))
+                             }
+                           })
+
+geom_split_violin <- function(mapping = NULL, data = NULL, stat = "ydensity", position = "identity", ...,
+                              draw_quantiles = NULL, trim = TRUE, scale = "area", na.rm = FALSE,
+                              show.legend = NA, inherit.aes = TRUE) {
+  layer(data = data, mapping = mapping, stat = stat, geom = GeomSplitViolin,
+        position = position, show.legend = show.legend, inherit.aes = inherit.aes,
+        params = list(trim = trim, scale = scale, draw_quantiles = draw_quantiles, na.rm = na.rm, ...))
+}
+
+bc_data1$pause[bc_data1$pause <.025] <- .025
+f1 <- function(x) {
+  log10(mean(10 ^ x))
+}
+ 
+
+ggplot(data = bc_data1, aes(x=stimuli, y = pause, fill = age)) +
+  theme_classic()+
+  scale_y_log10(breaks = c(.025,.050,.100, .200,.500,1.000,2.000, 5.000, 10.000, 20.000, 40.000), 
+                limits = c(.024, 80)) +
+  theme(panel.grid.minor = element_blank(),
+         text = element_text(size = 16),
+         legend.position = "none",
+         # remove the vertical grid lines
+           panel.grid.major.x = element_blank() ,
+           # explicitly set the horizontal lines (or they will disappear too)
+           panel.grid.major.y = element_line( size=.001, color="grey" )
+    )+
+  scale_fill_manual(values=c( "olivedrab1","olivedrab4"))+
+  scale_color_manual(values=c( "olivedrab1","olivedrab4"))+
+  scale_x_discrete( labels=c("pt-high" = "High", "pt_moderate" = "Moderate",
+                           "pt-low" = "Low", "pt-very-low" = "Very low",
+                           "silence" = "Silence", "control" = "Control"))+
+  xlab("Predation threat") +
+  ylab("Pause duration (s)")+
+  geom_split_violin(trim = FALSE, alpha = 0.5, color = NA, adjust = .9, scale = "width")+
+  geom_dotplot(binaxis = "y", stackdir = "center",
+                stackratio=0.8, dotsize = 0.6,
+                position = position_dodge(width = .5),
+                alpha = 0.2,
+               binwidth = 0.15) +
+  stat_summary(fun= f1,
+               geom = "crossbar",
+               color=c("grey50","grey30","grey50","grey30","grey50","grey30",
+                       "grey50","grey30","grey50","grey30","grey50","grey30"),
+               width = 0.40,
+               position = position_dodge(width = .40),) -> p4
+
+print(p4)
+dev.print( png,filename="pause_violin.png",
+           units="cm",width=14,res=300,bg="white")
+
+ 
+
+
+```
+
