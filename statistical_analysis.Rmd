@@ -1,0 +1,538 @@
+---
+title: Supplementary Information I. Statistical Analysis of "Bush-crickets show lifelong flexibility in courtship signals to match predation threat"
+author: Antoniya Hubancheva (antonia.hubancheva@gmail.com), Viktor Senderov, Manuela Nowotny, Stefan
+  Schöneich and Holger R. Goerlitz
+output:
+  html_document:
+    df_print: paged
+---
+
+# Introduction
+
+The statistical analysis has been carried in `r R.version$version.string`, version info, as well as used packages follow. If any of the needed packages are FALSE, please install them first.
+
+## Packages
+
+```{r echo=FALSE}
+rm(list = ls())
+
+package_list = c("yaml", "dplyr", "MASS", "car", "geepack", "ggplot2")
+
+suppressPackageStartupMessages({
+  sapply(package_list, require, character.only = TRUE)
+})
+```
+
+## Configuration
+
+Configuration is in the file `config.yml`.
+
+```{r echo=FALSE}
+config = yaml::read_yaml(file = "config.yml")
+cat(paste0(readLines(con = "config.yml"), "\n"), sep = "")
+```
+
+```{r}
+bc_data = read.csv(config$bc_data_f, header = TRUE, stringsAsFactors = FALSE)
+```
+
+
+# Data understanding
+
+## Repeated measures
+
+  1. Longitudinally bushcrickets have been measured twice (age 1 and age 2).
+  2. For a given age, each bushcricket's response was measured to several different stimuli (six), however stimulus order has been randomized.
+  3. For a fixed age, cricket, and stimulus, we have several repeated measures (up to 4).
+
+*Repeated measures implies that there may be some correlation within the measurements of an individual.*
+
+## Missing data
+
+### Unbalanced between ages: different ages have different number of crickets in them.
+
+Some bush-crickets died between ages, however their death was not correlated to any particular response, *therefore missing completely at random (MCAR)*. Several bush-crickets were recruited for age 2
+
+```{r echo=FALSE}
+cat("Number of measurements for age 1:")
+bc_data %>% filter(age == 1) %>% nrow
+cat("Number of measurements for age 2:")
+bc_data %>% filter(age == 2) %>% nrow
+```
+
+### Unbalanced within age: also same bushcricket may be measured different times for a given age
+
+Some stimuli were repeated less than 4 times because a bushcricket stopped singing. This does not seem to be random, however, as the bushcrickets that have some stimuli missing, tend to have also other missing.
+
+In the printout below different columns represent different treatments but not necessarily in the same order. Shown informatively to inspect the balanceness of the data.
+
+```{r echo=FALSE}
+for (a in unique(bc_data$age)) {
+  cat("Age", a, "\n")
+ # print(unique(bc_data$stimuli))
+  for (i in unique(bc_data$id)) {
+    cat(i, " ")
+    bc_data %>% dplyr::filter(age == a & id == i) %>% with({stimuli}) %>% table %>% cat
+    cat("\n")
+  }
+}
+rm(a, i)
+```
+
+With respect to the number of measurements, data does not appear to be missing at random. For this reason we have *summarized the up to four treatments,* see below.
+
+## Transform variable stimuli into quantitaive form
+
+| Type	| Frequency (kHz) |	dB SPL RMS @bushcricket	| Single call duration (ms)	| Pulse interval duration (ms)	| Total call train duration (ms) |
+| ----------|-------|-----|---|-----|------|
+| control   |	10	  | 88	| 3	| 30	| 1000 |
+| bat call	| 85-25 |	87	| 3	| 30	| 1000 |
+| bat call	| 85-25	| 77	| 3	| 30	| 1000 |
+| bat call	| 85-25	| 67	| 3	| 30	| 1000 |
+| bat call	| 85-25	| 57	| 3	| 30	| 1000 |
+| silence   |	0	    |0	  | 0 |  0  | 1000 |
+
+1. We create two variables `db_bat` (in the paper referred as "threat intensity") and `db_control`(in the paper referred as "control intensity") which contain the sound pressure level in decibels of the bat call and the control call.
+2. We set `id` to be a factors.
+3. Convert age to weeks
+
+```{r}
+do.call(
+  function(bc_data,
+           treatment_type = c("silence", "pt-very-low", "pt-low", "pt_moderate", "pt-high", "control"),
+           db_bat = c(0, 57, 67, 77, 87, 0),
+           db_control = c(0, 0, 0, 0, 0, 88),
+           weeks = c(3,10))
+  {
+    bc_data$db_bat = db_bat[sapply(bc_data$stimuli, function(s) { which(treatment_type == s) })]
+    bc_data$db_control = db_control[sapply(bc_data$stimuli, function(s) { which(treatment_type == s) })]
+    bc_data$weeks = weeks[bc_data$age]
+    bc_data$id = as.factor(bc_data$id)
+    bc_data$age = as.factor(bc_data$age)
+    return(bc_data)
+  },
+  list(bc_data)
+) -> bc_data
+
+bc_data$stimuli = factor(bc_data$stimuli, levels = c("silence", "pt-very-low", "pt-low", "pt_moderate", "pt-high", "control" ))
+```
+
+#### Average the treatments (id, stimuli, age) for each bush-cricket
+
+- pause: round up the mean to nearest whole number in order to use a Poisson model
+- reaction: is pause > 1 then yes, а single treatment is considered to have had reaction
+- simultaneous_singing (in the paper referred as "early resume"): 
+if the mean across repetitions is the less than 0 then yes
+
+```{r}
+bc_data %>% dplyr::group_by(id, stimuli, age) %>% dplyr::summarize(
+                                                     reaction = (sum(pause > 1, na.rm =  TRUE) / length(pause)) >= .5,
+                                                    pause = ceiling(mean(pause, na.rm =  TRUE)),
+                                                    post.stimulus = ceiling(mean(post.stimulus, na.rm = TRUE)),
+                                                    simultaneous_singing = ceiling(mean(post.stimulus, na.rm = TRUE)) < 0, 
+                                                    db_bat = first(db_bat),
+                                                    db_control = first(db_control),
+                                                    weeks = first(weeks)
+                                                  ) -> bc_data
+
+```
+
+
+
+
+
+
+# Modeling
+
+## Marginal model (generalized estimating qquations)
+
+### Basic
+
+Idea:  model `pause` as a function of `age`, `db_bat` and `db_control`
+
+```{r}
+pause_f1 = pause ~ age + db_bat + db_control
+pause_f2 = pause ~ age + db_bat + db_control + db_bat*age
+pause_f3 = pause ~ age + stimuli                    
+pause_f4 = pause ~ age + stimuli + age * stimuli    # with interaction
+
+reaction_f1 =  reaction ~ age + db_bat + db_control
+reaction_f2 =  reaction ~ age + db_bat + db_control + db_bat*age
+reaction_f3 =  reaction ~ age + stimuli
+reaction_f4 =  reaction ~ age + stimuli + age*stimuli
+```
+
+This supposes that the regression slope (but not necessarily the intercept) of
+the marginal models will be the same. For example, for `age == 1` an increase in
+10 dB in the bat call will lead to the same increase in response as for `age == 2`
+
+- pause models the conditional parameter λ of the poisson distribution
+
+Assess the conditional distributions Yi|Xi
+
+- don't need to do it for reaction, as obviously Bernouili distributed
+
+For pause see below
+
+```{r, warning=FALSE, fig.keep='all'}
+sapply(unique(bc_data$age), function(a) {
+  sapply(unique(bc_data$db_bat), function(db) {
+    sapply(unique(bc_data$db_control), function(dc) {
+      pause = dplyr::filter(bc_data, age == a & db_bat == db & db_control == dc)$pause
+      tryCatch({
+        with(MASS::fitdistr(pause, "Poisson"), {
+          car::qqp(pause, "pois", lambda = estimate)
+          mtext(paste("age", a, "db_bat", db, "db_control", dc))
+          
+        })
+        }, error = function(e) {
+        #warning(e, " age", a, "db_bat ", db, "db_control ", dc, "\n")
+      })
+    })
+  })
+  return("")
+})
+```
+# Model fit and selection
+
+## GEE
+
+- no need to specify random effects
+- can deal with repeated measurements
+- can deal with data, which is MCAR (missing completely at random)
+
+```{r message=FALSE, warning=FALSE}
+pause_m = list(
+  geepack::geeglm(formula = pause_f1,
+                   family = poisson("log"), 
+                   corstr = "exchangeable", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = pause_f2,
+                   family = poisson("log"), 
+                   corstr = "exchangeable", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = pause_f3,
+                   family = poisson("log"), 
+                   corstr = "exchangeable", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = pause_f4,
+                   family = poisson("log"), 
+                   corstr = "exchangeable", data = bc_data,
+                   id = id, waves = age),
+ 
+  geepack::geeglm(formula = pause_f1,
+                   family = poisson("log"), 
+                   corstr = "independence", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = pause_f2,
+                   family = poisson("log"), 
+                   corstr = "independence", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = pause_f3,
+                   family = poisson("log"), 
+                   corstr = "independence", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = pause_f3,
+                   family = poisson("log"), 
+                   corstr = "independence", data = bc_data,
+                   id = id, waves = age)
+  
+  )
+
+reaction_m = list(
+  geepack::geeglm(formula = reaction_f1,
+                   family = binomial("logit"), 
+                   corstr = "exchangeable", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = reaction_f2,
+                   family = binomial("logit"), 
+                   corstr = "exchangeable", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = reaction_f3,
+                   family = binomial("logit"), 
+                   corstr = "exchangeable", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = reaction_f4,
+                   family = binomial("logit"), 
+                   corstr = "exchangeable", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = reaction_f1,
+                   family = binomial("logit"), 
+                   corstr = "independence", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = reaction_f2,
+                   family = binomial("logit"), 
+                   corstr = "independence", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = reaction_f3,
+                   family = binomial("logit"), 
+                   corstr = "independence", data = bc_data,
+                   id = id, waves = age),
+  
+  geepack::geeglm(formula = reaction_f4,
+                   family = binomial("logit"), 
+                   corstr = "independence", data = bc_data,
+                   id = id, waves = age)
+  
+  )
+```
+
+## Model selection (GEE)
+
+```{r}
+options(digits=10)
+sapply(pause_m, geepack::QIC)
+sapply(reaction_m, geepack::QIC)
+```
+
+Preferred model: model 1 based on CIC
+- no support for the hypothesis that there is an interaction
+- prefer exchangebale correlation structure
+- continuous covariates
+
+
+# Results
+
+## Model summaries 
+
+- http://environmentalcomputing.net/interpreting-coefficients-in-glms/
+- Model interpretation
+- Controlling for multiple testing --- multivariate regression
+
+```{r}
+summary(pause_m[[1]])
+p = tidy(pause_m[[1]])
+
+summary(reaction_m[[1]])
+r = tidy(reaction_m[[1]])
+
+# corrected p.values
+pvals = data.frame(p$p.value, r$p.value)#, s$p.value)
+corrected_pvals = as.data.frame(do.call(rbind, lapply(1:nrow(pvals), function(i) {
+  p.adjust(as.numeric(pvals[i, ]))
+})))
+names(corrected_pvals) = c("corr p", "corr r")#, "corr s")
+
+p = cbind(p, corrected_pvals[,1])
+r = cbind(r, corrected_pvals[,2])
+p
+r
+```
+
+## Assessing the model fit
+
+pause_m[[1]] - preferred model, no interaction
+
+```{r}
+odds2p = function(odds) {
+  exp(odds)/(1 + exp(odds))
+}
+
+dbs = c(87, 77, 67, 57, 0)
+dbcs = c(0, 0, 0, 0, 88)
+age = c(1, 2)
+
+cat("Pause duration: observed vs modeled values")
+sapply(
+  1:length(dbs),
+  function(ix)
+  {
+    sapply(age, function(a) 
+    {
+      m = mean(dplyr::filter(bc_data, age == a & db_bat == dbs[ix] & db_control == dbcs[ix])$pause)
+      med = median(dplyr::filter(bc_data, age == a & db_bat == dbs[ix] & db_control == dbcs[ix])$pause)
+      mod = exp(predict(pause_m[[1]], data.frame("age" = as.factor(a), db_bat = dbs[ix], db_control = dbcs[ix])))
+      cat("age:", a, "bat:", dbs[ix], "control:", dbcs[ix], "mean:", m, "model:", mod, "\n")
+
+    }
+    )
+    return ("")
+  }
+)
+
+cat("Reaction probability: observed vs modeled values")
+sapply(
+  1:length(dbs),
+  function(ix)
+  {
+    sapply(age, function(a) 
+    {
+      m = mean(dplyr::filter(bc_data, age == a & db_bat == dbs[ix] & db_control == dbcs[ix])$reaction)
+      med = median(dplyr::filter(bc_data, age == a & db_bat == dbs[ix] & db_control == dbcs[ix])$reaction)
+      mod =  odds2p(predict(pause_m[[1]], data.frame("age" = as.factor(a), db_bat = dbs[ix], db_control = dbcs[ix])))
+      cat("age:", a, "bat:", dbs[ix], "control:", dbcs[ix], "mean:", m, "model:", mod, "\n")
+    }
+    )
+    return("")
+  }
+)
+
+
+
+```
+
+
+
+
+## Calculate change of factor
+
+```{r}
+cat("Decrease of 10 db for age 1 leads to a change of factor for pause duration of:")
+exp(predict(pause_m[[1]], data.frame("age" = as.factor(1), db_bat = 87, db_control = 0)))/
+exp(predict(pause_m[[1]], data.frame("age" = as.factor(1), db_bat = 77, db_control = 0)))
+```
+
+
+## Graphs
+
+
+
+```{r eval: FALSE}
+bc_data$stimuli= factor(bc_data$stimuli, levels = c("pt-high", "pt_moderate", "pt-low", "pt-very-low", "silence", "control"))
+
+bc_data$pause = bc_data$pause/1000
+bc_data1 = bc_data
+bc_data1[bc_data$pause == .001, "pause"] = .015
+
+ bc_data   %>%
+   dplyr::group_by(stimuli, age) %>% dplyr::summarize(reaction_percentage = sum(reaction)/length(reaction)) %>%
+  ggplot( aes(x=stimuli, y = reaction_percentage, fill = age)) +
+   geom_bar(stat = "identity", position = "dodge") + 
+   scale_x_discrete(labels=c("pt-high" = "high", "pt_moderate" = "moderate",
+                            "pt-low" = "low", "pt-very-low" = "very low", "control" = "cricket"))+
+   xlab("Predation Threat") + ylab("Proportion of reacting males") -> p1a
+
+ bc_data   %>%
+   dplyr::group_by(stimuli, age) %>% dplyr::summarize(reaction_percentage = sum(reaction)/length(reaction)) %>%
+  ggplot( aes(x=stimuli, y = reaction_percentage, fill = age, alpha = 0.5)) +
+   geom_bar(stat = "identity", position = "dodge", width=0.8) +
+ theme_bw()+
+theme(text = element_text(size = 15), legend.position = "none",
+      # remove the vertical grid lines
+           panel.grid.major.x = element_blank() ,
+           # explicitly set the horizontal lines (or they will disappear too)
+           panel.grid.major.y = element_line( size=.01, color="grey" ) 
+      ) +
+  scale_fill_manual(values=c( "olivedrab1","olivedrab4"))+
+   scale_x_discrete(labels=c("pt-high" = "High", "pt_moderate" = "Moderate",
+                            "pt-low" = "Low", "pt-very-low" = "Very low", "silence" = "Silence",
+                            "control" = "Control"))+
+   xlab("Predation Threat") + ylab("Reacting males") -> p1
+print(p1)
+dev.print( png,filename="reacting-males.png",
+           units="cm",width=14,res=300,bg="white")
+
+
+bc_data  %>% dplyr::group_by(stimuli, age) %>% dplyr::summarize(ignore_threat = sum(simultaneous_singing)/length(simultaneous_singing)) %>%
+ ggplot( aes(x=stimuli, y = ignore_threat, fill = age, alpha = 0.5)) +
+  theme_bw()+
+  theme(text = element_text(size = 15), 
+        legend.position = "none",
+        # remove the vertical grid lines
+           panel.grid.major.x = element_blank() ,
+           # explicitly set the horizontal lines (or they will disappear too)
+           panel.grid.major.y = element_line( size=.01, color="grey" ) ) +
+  scale_fill_manual(values=c( "olivedrab1","olivedrab4"))+
+  geom_bar(stat = "identity", position = "dodge", width=0.8) +
+  scale_x_discrete(labels=c("pt-high" = "High", "pt_moderate" = "Moderate",
+                            "pt-low" = "Low", "pt-very-low" = "Very low", "silence" = "Silence",
+                            "control" = "Control"))+
+  xlab("Predation Threat") + ylab("Ignoring threat") -> p2
+print(p2)
+dev.print( png,filename="ignoring-predation-threat.png",
+           units="cm",width=14,res=300,bg="white")
+
+
+GeomSplitViolin <- ggproto("GeomSplitViolin", GeomViolin,
+                           draw_group = function(self, data, ..., draw_quantiles = NULL) {
+                             data <- transform(data, xminv = x - violinwidth * (x - xmin), 
+                                               xmaxv = x + violinwidth * (xmax - x))
+                             grp <- data[1, "group"]
+                             newdata <- plyr::arrange(transform(data, x = if (grp %% 2 == 1) xminv else xmaxv), 
+                                                      if (grp %% 2 == 1) y else -y)
+                             newdata <- rbind(newdata[1, ], newdata, newdata[nrow(newdata), ], newdata[1, ])
+                             newdata[c(1, nrow(newdata) - 1, nrow(newdata)), "x"] <- round(newdata[1, "x"])
+
+                             if (length(draw_quantiles) > 0 & !scales::zero_range(range(data$y))) {
+                               stopifnot(all(draw_quantiles >= 0), all(draw_quantiles <=
+                                                                         1))
+                               quantiles <- ggplot2:::create_quantile_segment_frame(data, draw_quantiles)
+                               aesthetics <- data[rep(1, nrow(quantiles)), setdiff(names(data), c("x", "y")), 
+                                                  drop = FALSE]
+                               aesthetics$alpha <- rep(1, nrow(quantiles))
+                               both <- cbind(quantiles, aesthetics)
+                               quantile_grob <- GeomPath$draw_panel(both, ...)
+                               ggplot2:::ggname("geom_split_violin", grid::grobTree(GeomPolygon$draw_panel(newdata, ...), quantile_grob))
+                             }
+                             else {
+                               ggplot2:::ggname("geom_split_violin", GeomPolygon$draw_panel(newdata, ...))
+                             }
+                           })
+
+geom_split_violin <- function(mapping = NULL, data = NULL, stat = "ydensity", position = "identity", ...,
+                              draw_quantiles = NULL, trim = TRUE, scale = "area", na.rm = FALSE,
+                              show.legend = NA, inherit.aes = TRUE) {
+  layer(data = data, mapping = mapping, stat = stat, geom = GeomSplitViolin,
+        position = position, show.legend = show.legend, inherit.aes = inherit.aes,
+        params = list(trim = trim, scale = scale, draw_quantiles = draw_quantiles, na.rm = na.rm, ...))
+}
+
+bc_data1$pause[bc_data1$pause <.025] <- .025
+f1 <- function(x) {
+  log10(mean(10 ^ x))
+}
+ 
+
+ggplot(data = bc_data1, aes(x=stimuli, y = pause, fill = age)) +
+  theme_classic()+
+  scale_y_log10(breaks = c(.025,.050,.100, .200,.500,1.000,2.000, 5.000, 10.000, 20.000, 40.000), 
+                limits = c(.024, 80)) +
+  theme(panel.grid.minor = element_blank(),
+         text = element_text(size = 16),
+         legend.position = "none",
+         # remove the vertical grid lines
+           panel.grid.major.x = element_blank() ,
+           # explicitly set the horizontal lines (or they will disappear too)
+           panel.grid.major.y = element_line( size=.001, color="grey" )
+    )+
+  scale_fill_manual(values=c( "olivedrab1","olivedrab4"))+
+  scale_color_manual(values=c( "olivedrab1","olivedrab4"))+
+  scale_x_discrete( labels=c("pt-high" = "High", "pt_moderate" = "Moderate",
+                           "pt-low" = "Low", "pt-very-low" = "Very low",
+                           "silence" = "Silence", "control" = "Control"))+
+  xlab("Predation threat") +
+  ylab("Pause duration (s)")+
+  geom_split_violin(trim = FALSE, alpha = 0.5, color = NA, adjust = .9, scale = "width")+
+  geom_dotplot(binaxis = "y", stackdir = "center",
+                stackratio=0.8, dotsize = 0.6,
+                position = position_dodge(width = .5),
+                alpha = 0.2,
+               binwidth = 0.15) +
+  stat_summary(fun= f1,
+               geom = "crossbar",
+               color=c("grey50","grey30","grey50","grey30","grey50","grey30",
+                       "grey50","grey30","grey50","grey30","grey50","grey30"),
+               width = 0.40,
+               position = position_dodge(width = .40),) -> p4
+
+print(p4)
+dev.print( png,filename="pause_violin.png",
+           units="cm",width=14,res=300,bg="white")
+
+ 
+
+
+```
+
